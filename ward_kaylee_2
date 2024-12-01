@@ -1,0 +1,191 @@
+from PyQt5 import QtCore, QtGui, QtWidgets
+import sys
+import cv2
+import time
+from fer import FER
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
+
+class Ui_MainWindow(object):
+    def __init__(self):
+        super().__init__()
+        self.cap = None
+        self.emotion_recognizer = FER()
+        self.start_time = time.time()
+        self.end_time = None
+        self.cumulative_emotions = {emotion: 0 for emotion in ["neutral", "happy", "sad", "surprised", "fear", "anger", "disgust"]}
+        self.frame_count = 0
+
+    def setupUi(self, MainWindow):
+        MainWindow.setObjectName("MainWindow")
+        MainWindow.resize(800, 600)
+        self.centralwidget = QtWidgets.QWidget(MainWindow)
+        self.centralwidget.setObjectName("centralwidget")
+
+        self.mirror_check = QtWidgets.QCheckBox(self.centralwidget)
+        self.mirror_check.setGeometry(QtCore.QRect(590, 310, 131, 21))
+        self.mirror_check.setObjectName("mirror_check")
+        self.mirror_check.setText("Mirror Image")
+
+        self.fps_label = QtWidgets.QLabel(self.centralwidget)
+        self.fps_label.setGeometry(QtCore.QRect(50, 310, 67, 17))
+        self.fps_label.setObjectName("fps_label")
+        self.fps_label.setText("FPS:")
+
+        self.neutral_bar = self.createProgressBar(160, 340)
+        self.happy_bar = self.createProgressBar(160, 360)
+        self.sad_bar = self.createProgressBar(160, 380)
+        self.surp_bar = self.createProgressBar(160, 400)
+        self.fear_bar = self.createProgressBar(160, 420)
+        self.anger_bar = self.createProgressBar(160, 440)
+        self.disgust_bar = self.createProgressBar(160, 460)
+
+        self.neutral_text = self.createTextLabel(70, 340, "Neutral")
+        self.happy_text = self.createTextLabel(70, 360, "Happy")
+        self.sad_text = self.createTextLabel(70, 380, "Sad")
+        self.surp_text = self.createTextLabel(70, 400, "Surprised")
+        self.fear_text = self.createTextLabel(70, 420, "Fear")
+        self.anger_text = self.createTextLabel(70, 440, "Anger")
+        self.disgust_text = self.createTextLabel(70, 460, "Disgust")
+
+        self.camera_label = QtWidgets.QLabel(self.centralwidget)
+        self.camera_label.setGeometry(QtCore.QRect(30, 10, 681, 271))
+        self.camera_label.setText("")
+        self.camera_label.setObjectName("camera_label")
+
+        MainWindow.setCentralWidget(self.centralwidget)
+        self.menubar = QtWidgets.QMenuBar(MainWindow)
+        self.menubar.setGeometry(QtCore.QRect(0, 0, 800, 29))
+        self.menubar.setObjectName("menubar")
+        MainWindow.setMenuBar(self.menubar)
+        self.statusbar = QtWidgets.QStatusBar(MainWindow)
+        self.statusbar.setObjectName("statusbar")
+        MainWindow.setStatusBar(self.statusbar)
+
+        self.select_camera(0)
+
+        self.toolbar = QtWidgets.QToolBar("Report Tool Bar")
+        self.setupToolbar()
+        MainWindow.addToolBar(self.toolbar)
+
+        MainWindow.setCentralWidget(self.centralwidget)
+        self.retranslateUi(MainWindow)
+        QtCore.QMetaObject.connectSlotsByName(MainWindow)
+
+    def setupToolbar(self):
+        save_action = QtWidgets.QAction("Save Report", self.centralwidget)
+        save_action.setStatusTip("Save the Mood Analysis Report")
+        save_action.triggered.connect(self.save_report)
+        self.toolbar.addAction(save_action)
+
+    def select_camera(self, i):
+        self.cap = cv2.VideoCapture(0)
+        if not self.cap.isOpened():
+            sys.exit("Error: Could not open camera.")
+
+        self.timer = QtCore.QTimer(self.centralwidget)
+        self.timer.timeout.connect(self.update_frame)
+        self.timer.start(30)
+
+    def createProgressBar(self, x, y):
+        progress_bar = QtWidgets.QProgressBar(self.centralwidget)
+        progress_bar.setGeometry(QtCore.QRect(x, y, 441, 23))
+        progress_bar.setProperty("value", 24)
+        return progress_bar
+
+    def createTextLabel(self, x, y, text):
+        label = QtWidgets.QLabel(self.centralwidget)
+        label.setGeometry(QtCore.QRect(x, y, 67, 17))
+        label.setText(text)
+        return label
+
+    def analyze_emotions(self, frame):
+        try:
+            emotion_results = self.emotion_recognizer.detect_emotions(frame)
+
+            if emotion_results:
+                emotions = emotion_results[0]["emotions"]
+            else:
+                emotions = {key: 0 for key in self.cumulative_emotions.keys()}
+
+            self.neutral_bar.setValue(int(emotions.get("neutral", 0) * 100))
+            self.happy_bar.setValue(int(emotions.get("happy", 0) * 100))
+            self.sad_bar.setValue(int(emotions.get("sad", 0) * 100))
+            self.surp_bar.setValue(int(emotions.get("surprised", 0) * 100))
+            self.fear_bar.setValue(int(emotions.get("fear", 0) * 100))
+            self.anger_bar.setValue(int(emotions.get("anger", 0) * 100))
+            self.disgust_bar.setValue(int(emotions.get("disgust", 0) * 100))
+
+            for emotion, value in emotions.items():
+                self.cumulative_emotions[emotion] += value
+
+            self.frame_count += 1
+        except Exception as e:
+            self.statusbar.showMessage(f"Emotion analysis error: {e}")
+
+    def update_frame(self):
+        ret, frame = self.cap.read()
+        if not ret:
+            self.statusbar.showMessage("Error capturing frame")
+            return
+
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        height, width, channel = frame_rgb.shape
+        bytes_per_line = 3 * width
+        q_img = QtGui.QImage(frame_rgb.data, width, height, bytes_per_line, QtGui.QImage.Format_RGB888)
+        pixmap = QtGui.QPixmap.fromImage(q_img)
+        if self.mirror_check.isChecked():
+	transform = QtGui.QTransform().scale(-1, 1).translate(-width, 0)
+	pixmap = pixmap.transformed(transform)
+
+        self.camera_label.setPixmap(pixmap)
+        self.analyze_emotions(frame)
+
+    def save_report(self):
+        self.end_time = time.time()
+        duration = self.end_time - self.start_time
+
+        averages = {emotion: (sum(tota)l / self.frame_count if self.frame_count > 0 else 0)
+                    for emotion, total in self.cumulative_emotions.items()}
+
+        report = f"Emotion Analysis Report\n\nDuration: {duration:.2f} seconds\n\nOverall Average Emotions:\n"
+        for emotion, avg in averages.items():
+            report += f"    {emotion.capitalize()}: {avg * 100:.2f}%\n"
+
+        options = QtWidgets.QFileDialog.Options()
+        file_path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            None, "Save Report", "", "Text Files (*.txt);;PDF Files (*.pdf);;All Files (*)", options=options)
+
+        if file_path:
+            if file_path.endswith(".txt"):
+                with open(file_path, "w") as f:
+                    f.write(report)
+            elif file_path.endswith(".pdf"):
+                self.save_report_pdf(file_path, report)
+
+    def save_report_pdf(self, file_path, report):
+        c = canvas.Canvas(file_path, pagesize=letter)
+        text_object = c.beginText(40, 750)
+        text_object.setFont("Helvetica", 10)
+        for line in report.split("\n"):
+            text_object.textLine(line)
+        c.drawText(text_object)
+        c.showPage()
+        c.save()
+
+    def retranslateUi(self, MainWindow):
+        _translate = QtCore.QCoreApplication.translate
+        MainWindow.setWindowTitle(_translate("MainWindow", "Emotion Analyzer"))
+
+
+if __name__ == "__main__":
+    app = QtWidgets.QApplication(sys.argv)
+    MainWindow = QtWidgets.QMainWindow()
+    ui = Ui_MainWindow()
+    ui.setupUi(MainWindow)
+    MainWindow.show()
+    sys.exit(app.exec_())
